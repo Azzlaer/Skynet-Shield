@@ -93,9 +93,10 @@ class Store:
         with closing(self.connect()) as db, db:
             db.execute("DELETE FROM sessions WHERE game_session=? AND server_id=?", (session,server_id))
 
-    def overview(self):
+    def overview(self, allowed_servers=None):
         with closing(self.connect()) as db:
-            active = db.execute("SELECT COUNT(*) FROM sessions WHERE expires > ?", (self.clock(),)).fetchone()[0]
+            counts = db.execute("SELECT server_id,COUNT(*) FROM sessions WHERE expires > ? GROUP BY server_id", (self.clock(),)).fetchall()
+            active = sum(n for sid,n in counts if allowed_servers is None or sid in allowed_servers)
             events = db.execute("SELECT id,created,game_session,kind,source,server_id FROM events ORDER BY id DESC LIMIT 100").fetchall()
         return {"active_sessions":active,"events":[dict(zip(("id","created","game_session","kind","source","server_id"), row)) for row in events]}
 
@@ -113,14 +114,20 @@ def make_app(store, game_key, admin_key):
         token = auth[7:] if auth.startswith("Bearer ") else ""
         method, path = env.get("REQUEST_METHOD"),env.get("PATH_INFO")
         try:
-            if method == "GET" and path in ("/v1/admin/overview","/v1/admin/servers"):
+            if method == "GET" and path in ("/v1/admin/overview","/v1/admin/servers","/v1/admin/sessions"):
                 if not hmac.compare_digest(token.encode(),admin_key.encode()):
                     return respond(401)
                 if path.endswith("/servers"):
                     with closing(store.connect()) as db:
                         counts=dict(db.execute("SELECT server_id,COUNT(*) FROM sessions WHERE expires>? GROUP BY server_id",(store.clock(),)))
                     return respond(200,{"servers":[{"server_id":sid,"active_sessions":counts.get(sid,0)} for sid in sorted(registry)]})
-                return respond(200,store.overview())
+                if path.endswith("/sessions"):
+                    with closing(store.connect()) as db:
+                        ids = sorted(registry)
+                        marks = ",".join("?" for _ in ids)
+                        rows = db.execute("SELECT server_id,game_session,expires,last_seen FROM sessions WHERE expires>? AND server_id IN ("+marks+") ORDER BY expires DESC,server_id,game_session LIMIT 501",(store.clock(),*ids)).fetchall()
+                    return respond(200,{"sessions":[dict(zip(("server_id","game_session","expires","last_seen"),row)) for row in rows[:500]],"truncated":len(rows)>500})
+                return respond(200,store.overview(registry))
             if method != "POST" or path not in ("/v1/session/issue","/v1/session/revoke","/v1/heartbeat","/v1/events"):
                 return respond(404)
             server_id = identify(token) if path.startswith("/v1/session/") else None
