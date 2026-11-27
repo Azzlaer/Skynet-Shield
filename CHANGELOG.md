@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.12.0-alpha (proposed)
+## 0.13.0-alpha (proposed)
+- Strict API parsing, removed-instance grant cleanup, expiry locking and registry validation.
+- Concurrent replay/rotation and loopback lifecycle regression tests.
+- Targeted security review and release gates.
+
+## 0.12.0-alpha
 - AdminCP multi-server and session views, filtered export and XML registry validation.
 - Read-only administrative session endpoint with bounded results and no secrets.
 - Diagnostic tabs for integrity, timing reports and local database size.

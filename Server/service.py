@@ -16,6 +16,17 @@ SESSION = re.compile(r"[A-Za-z0-9_-]{1,64}")
 EVENTS = {"integrity_mismatch", "module_unlisted", "memory_mismatch", "regular_timing_review"}
 MAX_BODY = 4096
 
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key")
+        result[key] = value
+    return result
+
+def reject_constant(value):
+    raise ValueError("Non-finite JSON value")
+
 class Store:
     def __init__(self, path, ttl=300, capacity=10000, clock=time.time):
         if not 1 <= ttl <= 86400 or not 1 <= capacity <= 100000:
@@ -55,9 +66,9 @@ class Store:
         if not isinstance(session, str) or not SESSION.fullmatch(session) or not isinstance(server_id,str) or not SESSION.fullmatch(server_id):
             raise ValueError("Invalid game session")
         token = secrets.token_hex(32)
-        now = self.clock()
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
+            now = self.clock()
             db.execute("DELETE FROM sessions WHERE expires <= ?", (now,))
             db.execute("DELETE FROM sessions WHERE game_session = ? AND server_id = ?", (session,server_id))
             if db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] >= self.capacity:
@@ -71,10 +82,10 @@ class Store:
             type(sequence) is not int or not 0 < sequence < 2**64 or
             (event is not None and (not isinstance(event, str) or event not in EVENTS))):
             return False
-        now = self.clock()
         key = self.key(token)
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
+            now = self.clock()
             row = db.execute("SELECT game_session,expires,seq,server_id FROM sessions WHERE token_hash=?", (key,)).fetchone()
             if not row or row[1] <= now or sequence <= int(row[2]) or (allowed_servers is not None and row[3] not in allowed_servers):
                 return False
@@ -102,6 +113,10 @@ class Store:
 
 def make_app(store, game_key, admin_key):
     registry = validate_registry({"default": game_key} if isinstance(game_key,str) else game_key, admin_key)
+    # Remove grants for unregistered instances at startup, preventing revival on re-add.
+    with closing(store.connect()) as db, db:
+        marks = ",".join("?" for _ in registry)
+        db.execute("DELETE FROM sessions WHERE server_id NOT IN (" + marks + ")", tuple(registry))
     def identify(token):
         return next((sid for sid,key in registry.items() if hmac.compare_digest(token.encode(),key.encode())), None)
 
@@ -111,9 +126,11 @@ def make_app(store, game_key, admin_key):
             start(f"{code} {HTTPStatus(code).phrase}", [("Content-Type","application/json"),("Content-Length",str(len(body))),("Cache-Control","no-store")])
             return [body]
         auth = env.get("HTTP_AUTHORIZATION","")
-        token = auth[7:] if auth.startswith("Bearer ") else ""
+        token = auth[7:] if isinstance(auth,str) and len(auth)==71 and auth.startswith("Bearer ") else ""
         method, path = env.get("REQUEST_METHOD"),env.get("PATH_INFO")
         try:
+            if not HEX.fullmatch(token):
+                return respond(401)
             if method == "GET" and path in ("/v1/admin/overview","/v1/admin/servers","/v1/admin/sessions"):
                 if not hmac.compare_digest(token.encode(),admin_key.encode()):
                     return respond(401)
@@ -143,7 +160,7 @@ def make_app(store, game_key, admin_key):
             raw = env["wsgi.input"].read(length)
             if len(raw) != length:
                 return respond(400)
-            obj = json.loads(raw)
+            obj = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object, parse_constant=reject_constant)
             if not isinstance(obj,dict):
                 return respond(400)
             if path.startswith("/v1/session/"):
@@ -160,7 +177,7 @@ def make_app(store, game_key, admin_key):
                     return respond(400)
                 return respond(204 if store.accept(token,obj["sequence"],obj["kind"],registry) else 401)
             return respond(400)
-        except (ValueError,TypeError,UnicodeError):
+        except (ValueError,TypeError,UnicodeError,RecursionError):
             return respond(400)
         except OverflowError:
             return respond(503)

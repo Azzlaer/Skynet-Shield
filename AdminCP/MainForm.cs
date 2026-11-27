@@ -118,7 +118,7 @@ public sealed partial class MainForm : Form
             if (!Uri.TryCreate(address, UriKind.Absolute, out var uri) ||
                 !(uri.Scheme == "https" || (uri.Scheme == "http" && uri.IsLoopback)) ||
                 uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.AbsolutePath != "/" || !ValidKey(key)) {
-                status.Text = "Configuración inválida"; return;
+                InvalidateSnapshot(); status.Text = "Configuración inválida"; return;
             }
             using var req = new HttpRequestMessage(HttpMethod.Get, new Uri(uri,"/v1/admin/overview"));
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer",key);
