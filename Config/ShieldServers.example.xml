@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ShieldServers version="1">
+    <Server id="normal" keyEnv="SHIELD_GAME_KEY_NORMAL"/>
+    <Server id="vip" keyEnv="SHIELD_GAME_KEY_VIP"/>
+    <Server id="events" keyEnv="SHIELD_GAME_KEY_EVENTS"/>
+</ShieldServers>
