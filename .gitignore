@@ -1,0 +1,13 @@
+/build*/
+/.vs/
+/out/
+*.user
+*.suo
+*.pdb
+*.dll
+*.exe
+*.obj
+*.log
+.env
+*.pem
+*.key
