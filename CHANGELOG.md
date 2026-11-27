@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.13.0-alpha (proposed)
+## 1.0.0-alpha (proposed)
+- Windows x86/x64 SDK distribution, framework-dependent AdminCP and server tools.
+- Allowlisted ZIP packaging, SHA-256 manifests, CI artifacts and Spanish lab installation guide.
+- Not production ready; real MU integration remains pending.
+
+## 0.13.0-alpha
 - Strict API parsing, removed-instance grant cleanup, expiry locking and registry validation.
 - Concurrent replay/rotation and loopback lifecycle regression tests.
 - Targeted security review and release gates.
