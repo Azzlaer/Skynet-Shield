@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0-alpha (proposed)
+- Server-side diagnostic timing regularity analyzer with configurable policy.
+- Synthetic tests for regular, variable, short, batched and invalid samples.
+- No keyboard hooks or automatic sanctions; live calibration and integration pending.
+
 ## 0.5.0-alpha (proposed)
 - Native HTTPS heartbeat via WinHTTP.
 - Reference session validator with expiration, revocation and atomic replay rejection.
