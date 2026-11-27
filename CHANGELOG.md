@@ -1,11 +1,17 @@
 # Changelog
 
-## 0.6.0-alpha (proposed)
+## 0.7.0-alpha (proposed)
+- WSGI Shield Server with SQLite persistent sessions and bounded security events.
+- Separate GameServer and admin credentials; heartbeat and overview endpoints.
+- API lifecycle tests and local development runner.
+- Production TLS deployment and GameServer integration pending.
+
+## 0.6.0-alpha
 - Server-side diagnostic timing regularity analyzer with configurable policy.
 - Synthetic tests for regular, variable, short, batched and invalid samples.
 - No keyboard hooks or automatic sanctions; live calibration and integration pending.
 
-## 0.5.0-alpha (proposed)
+## 0.5.0-alpha
 - Native HTTPS heartbeat via WinHTTP.
 - Reference session validator with expiration, revocation and atomic replay rejection.
 - Native argument validation and Python session tests.
