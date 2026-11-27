@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.3.0-alpha (proposed)
+## 0.4.0-alpha (proposed)
+- Current-process module inventory and diagnostic path classification.
+- Windows CTest coverage for enumeration and path matching.
+- No external scanning or enforcement.
+
+## 0.3.0-alpha
 - Windows CNG SHA-256 buffer verification API in native DLL.
 - Known-answer and negative tests for caller-owned buffers.
 - Runtime integration and trusted baseline provisioning pending.
