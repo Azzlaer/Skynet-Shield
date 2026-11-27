@@ -23,15 +23,22 @@ def load_registry(env):
         data=stream.read(32769)
     if len(data)>32768 or b"<!" in data or b"\x00" in data:
         raise ValueError("Unsupported registry XML")
-    root=ET.fromstring(data.decode("utf-8"))
+    try:
+        root=ET.fromstring(data.decode("utf-8"))
+    except (ET.ParseError, UnicodeError) as exc:
+        raise ValueError("Invalid registry XML") from exc
     if root.tag!="ShieldServers" or root.attrib!={"version":"1"}:
         raise ValueError("Invalid registry XML")
+    if not 1 <= len(root) <= 128 or (root.text or "").strip():
+        raise ValueError("Invalid registry size or text")
     result={}
+    names=set()
     for entry in root:
-        if entry.tag!="Server" or set(entry.attrib)!={"id","keyEnv"} or len(entry):
+        if entry.tag!="Server" or set(entry.attrib)!={"id","keyEnv"} or len(entry) or (entry.text or "").strip() or (entry.tail or "").strip():
             raise ValueError("Invalid server entry")
         sid,name=entry.attrib["id"],entry.attrib["keyEnv"]
-        if sid in result or not ENV.fullmatch(name):
+        if sid in result or name in names or not ID.fullmatch(sid) or not ENV.fullmatch(name):
             raise ValueError("Invalid server entry")
+        names.add(name)
         result[sid]=env[name]
     return result
