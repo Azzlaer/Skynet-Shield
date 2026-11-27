@@ -1,0 +1,7 @@
+# Multi-GameServer Manager v0.11.0-alpha
+
+Set SHIELD_REGISTRY to a private copy of Config/ShieldServers.example.xml. Generate independent 64-character lowercase hex secrets for each named environment variable and SHIELD_ADMIN_KEY. Restart the service after configuration changes. The old single-key environment setup remains supported as server ID default. Never distribute the registry secrets to clients.
+
+Existing ShieldBridge ABI and client heartbeat routes do not change. Configure each GameServer bridge with its own key; the server derives instance identity from authentication, never from a client-supplied server ID. Session issue/revoke are scoped to (server_id,game_session). Events inherit the token's instance. GET /v1/admin/servers requires the admin key and returns configured IDs and unexpired session counts. Overview includes server_id for each event. AdminCP filtering is deferred.
+
+Back up SQLite before upgrading; migration invalidates old grants and preserves historical events under default. Players must reauthenticate. Removing an instance from XML and restarting rejects its tokens while absent; revoke its stored sessions before re-enabling the same ID. Changing a key blocks old service credentials after restart but does not revoke existing player grants automatically. No hot reload, per-instance rate limit, live connection status or live MU integration. Global capacity and history limits remain shared. TLS proxy and production testing still required. Reference MU repositories untouched.

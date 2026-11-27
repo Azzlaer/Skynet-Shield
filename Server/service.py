@@ -7,6 +7,7 @@ import re
 import secrets
 import sqlite3
 import time
+from Server.registry import load_registry, validate_registry
 from contextlib import closing
 from http import HTTPStatus
 
@@ -21,15 +22,26 @@ class Store:
             raise ValueError("Invalid limits")
         self.path, self.ttl, self.capacity, self.clock = path, ttl, capacity, clock
         with closing(self.connect()) as db, db:
-            db.executescript("""
+            db.execute("BEGIN IMMEDIATE")
+            # Explicit migration: old sessions belong to the legacy default instance.
+            if db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone() and not any(r[1]=="server_id" for r in db.execute("PRAGMA table_info(sessions)")):
+                db.execute("ALTER TABLE sessions RENAME TO sessions_v1")
+                db.execute("CREATE TABLE sessions (token_hash BLOB PRIMARY KEY, game_session TEXT NOT NULL, server_id TEXT NOT NULL, expires REAL NOT NULL, seq TEXT NOT NULL, last_seen REAL, UNIQUE(server_id,game_session))")
+                # Invalidate old grants on upgrade; require authenticated reissue.
+                db.execute("DROP TABLE sessions_v1")
+            if db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").fetchone() and not any(r[1]=="server_id" for r in db.execute("PRAGMA table_info(events)")):
+                db.execute("ALTER TABLE events ADD COLUMN server_id TEXT NOT NULL DEFAULT 'default'")
+            db.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
-                    token_hash BLOB PRIMARY KEY, game_session TEXT UNIQUE NOT NULL,
-                    expires REAL NOT NULL, seq TEXT NOT NULL, last_seen REAL
-                );
-                CREATE TABLE IF NOT EXISTS events (
+                    token_hash BLOB PRIMARY KEY, game_session TEXT NOT NULL, server_id TEXT NOT NULL,
+                    expires REAL NOT NULL, seq TEXT NOT NULL, last_seen REAL,
+                    UNIQUE(server_id, game_session)
+                )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY, created REAL NOT NULL,
-                    game_session TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL
-                );
+                    game_session TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL,
+                    server_id TEXT NOT NULL
+                )
             """)
 
     def connect(self):
@@ -39,22 +51,22 @@ class Store:
     def key(token):
         return hashlib.sha256(token.encode("ascii")).digest()
 
-    def issue(self, session):
-        if not isinstance(session, str) or not SESSION.fullmatch(session):
+    def issue(self, session, server_id="default"):
+        if not isinstance(session, str) or not SESSION.fullmatch(session) or not isinstance(server_id,str) or not SESSION.fullmatch(server_id):
             raise ValueError("Invalid game session")
         token = secrets.token_hex(32)
         now = self.clock()
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM sessions WHERE expires <= ?", (now,))
-            db.execute("DELETE FROM sessions WHERE game_session = ?", (session,))
+            db.execute("DELETE FROM sessions WHERE game_session = ? AND server_id = ?", (session,server_id))
             if db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] >= self.capacity:
                 raise OverflowError("Capacity reached")
-            db.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, NULL)",
-                       (self.key(token), session, now+self.ttl, "0"))
+            db.execute("INSERT INTO sessions(token_hash,game_session,server_id,expires,seq,last_seen) VALUES (?, ?, ?, ?, ?, NULL)",
+                       (self.key(token), session, server_id, now+self.ttl, "0"))
         return token
 
-    def accept(self, token, sequence, event=None):
+    def accept(self, token, sequence, event=None, allowed_servers=None):
         if (not isinstance(token, str) or not HEX.fullmatch(token) or
             type(sequence) is not int or not 0 < sequence < 2**64 or
             (event is not None and (not isinstance(event, str) or event not in EVENTS))):
@@ -63,33 +75,34 @@ class Store:
         key = self.key(token)
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT game_session,expires,seq FROM sessions WHERE token_hash=?", (key,)).fetchone()
-            if not row or row[1] <= now or sequence <= int(row[2]):
+            row = db.execute("SELECT game_session,expires,seq,server_id FROM sessions WHERE token_hash=?", (key,)).fetchone()
+            if not row or row[1] <= now or sequence <= int(row[2]) or (allowed_servers is not None and row[3] not in allowed_servers):
                 return False
             db.execute("UPDATE sessions SET seq=?,last_seen=? WHERE token_hash=?",
                        (str(sequence), now, key))
             if event:
                 # Keep a bounded history; client reports are explicitly untrusted.
-                db.execute("INSERT INTO events(created,game_session,kind,source) VALUES (?,?,?,?)",
-                           (now,row[0],event,"client_unverified"))
+                db.execute("INSERT INTO events(created,game_session,kind,source,server_id) VALUES (?,?,?,?,?)",
+                           (now,row[0],event,"client_unverified",row[3]))
                 db.execute("DELETE FROM events WHERE id <= (SELECT COALESCE(MAX(id),0)-10000 FROM events)")
         return True
 
-    def revoke(self, session):
+    def revoke(self, session, server_id="default"):
         if not isinstance(session, str) or not SESSION.fullmatch(session):
             raise ValueError("Invalid game session")
         with closing(self.connect()) as db, db:
-            db.execute("DELETE FROM sessions WHERE game_session=?", (session,))
+            db.execute("DELETE FROM sessions WHERE game_session=? AND server_id=?", (session,server_id))
 
     def overview(self):
         with closing(self.connect()) as db:
             active = db.execute("SELECT COUNT(*) FROM sessions WHERE expires > ?", (self.clock(),)).fetchone()[0]
-            events = db.execute("SELECT id,created,game_session,kind,source FROM events ORDER BY id DESC LIMIT 100").fetchall()
-        return {"active_sessions":active,"events":[dict(zip(("id","created","game_session","kind","source"), row)) for row in events]}
+            events = db.execute("SELECT id,created,game_session,kind,source,server_id FROM events ORDER BY id DESC LIMIT 100").fetchall()
+        return {"active_sessions":active,"events":[dict(zip(("id","created","game_session","kind","source","server_id"), row)) for row in events]}
 
 def make_app(store, game_key, admin_key):
-    if not all(isinstance(k,str) and HEX.fullmatch(k) for k in (game_key,admin_key)) or game_key == admin_key:
-        raise ValueError("Separate 256-bit hex keys required")
+    registry = validate_registry({"default": game_key} if isinstance(game_key,str) else game_key, admin_key)
+    def identify(token):
+        return next((sid for sid,key in registry.items() if hmac.compare_digest(token.encode(),key.encode())), None)
 
     def app(env, start):
         def respond(code, obj=None):
@@ -100,13 +113,18 @@ def make_app(store, game_key, admin_key):
         token = auth[7:] if auth.startswith("Bearer ") else ""
         method, path = env.get("REQUEST_METHOD"),env.get("PATH_INFO")
         try:
-            if method == "GET" and path == "/v1/admin/overview":
+            if method == "GET" and path in ("/v1/admin/overview","/v1/admin/servers"):
                 if not hmac.compare_digest(token.encode(),admin_key.encode()):
                     return respond(401)
+                if path.endswith("/servers"):
+                    with closing(store.connect()) as db:
+                        counts=dict(db.execute("SELECT server_id,COUNT(*) FROM sessions WHERE expires>? GROUP BY server_id",(store.clock(),)))
+                    return respond(200,{"servers":[{"server_id":sid,"active_sessions":counts.get(sid,0)} for sid in sorted(registry)]})
                 return respond(200,store.overview())
             if method != "POST" or path not in ("/v1/session/issue","/v1/session/revoke","/v1/heartbeat","/v1/events"):
                 return respond(404)
-            if path.startswith("/v1/session/") and not hmac.compare_digest(token.encode(),game_key.encode()):
+            server_id = identify(token) if path.startswith("/v1/session/") else None
+            if path.startswith("/v1/session/") and server_id is None:
                 return respond(401)
             if not HEX.fullmatch(token):
                 return respond(401)
@@ -125,15 +143,15 @@ def make_app(store, game_key, admin_key):
                 if set(obj) != {"game_session"}:
                     return respond(400)
                 if path.endswith("/issue"):
-                    return respond(201,{"token":store.issue(obj["game_session"]),"expires_in":store.ttl})
-                store.revoke(obj["game_session"])
+                    return respond(201,{"token":store.issue(obj["game_session"],server_id),"expires_in":store.ttl})
+                store.revoke(obj["game_session"],server_id)
                 return respond(204)
             if path == "/v1/heartbeat" and set(obj) == {"sequence"}:
-                return respond(204 if store.accept(token,obj["sequence"]) else 401)
+                return respond(204 if store.accept(token,obj["sequence"],allowed_servers=registry) else 401)
             if path == "/v1/events" and set(obj) == {"sequence","kind"}:
                 if not isinstance(obj["kind"],str) or obj["kind"] not in EVENTS:
                     return respond(400)
-                return respond(204 if store.accept(token,obj["sequence"],obj["kind"]) else 401)
+                return respond(204 if store.accept(token,obj["sequence"],obj["kind"],registry) else 401)
             return respond(400)
         except (ValueError,TypeError,UnicodeError):
             return respond(400)
@@ -145,4 +163,4 @@ def make_app(store, game_key, admin_key):
 
 def application_from_env():
     return make_app(Store(os.environ.get("SHIELD_DB","shield.sqlite3")),
-                    os.environ["SHIELD_GAME_KEY"],os.environ["SHIELD_ADMIN_KEY"])
+                    load_registry(os.environ),os.environ["SHIELD_ADMIN_KEY"])
