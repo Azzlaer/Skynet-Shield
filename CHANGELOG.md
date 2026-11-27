@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.0-alpha (proposed)
+- Native Windows ShieldBridge DLL with versioned C ABI, session issue and revoke over HTTPS.
+- Input validation tests and integration contract; actual host and multi-server support pending.
+
 ## 0.9.0-alpha (proposed)
 - Source-level client heartbeat worker and GameServer HTTPS reference adapter.
 - Lifecycle tests and MU integration guide.
