@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.4.0-alpha (proposed)
+## 0.5.0-alpha (proposed)
+- Native HTTPS heartbeat via WinHTTP.
+- Reference session validator with expiration, revocation and atomic replay rejection.
+- Native argument validation and Python session tests.
+- Live service, GameServer binding and integration testing pending.
+
+## 0.4.0-alpha
 - Current-process module inventory and diagnostic path classification.
 - Windows CTest coverage for enumeration and path matching.
 - No external scanning or enforcement.
