@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace SkynetShield.Admin;
-public sealed class MainForm : Form
+public sealed partial class MainForm : Form
 {
     readonly Color bg = Color.FromArgb(19, 25, 36), panel = Color.FromArgb(31, 42, 58), ink = Color.FromArgb(226, 234, 245);
     readonly TextBox endpoint = new() { Text = "http://127.0.0.1:8765", Width = 340 };
@@ -25,11 +25,11 @@ public sealed class MainForm : Form
     List<EventRow> rows = new();
     Process? child;
     bool busy, closing;
-    sealed record EventRow(long Id, DateTimeOffset Time, string Session, string Kind, string Source);
+    sealed record EventRow(long Id, DateTimeOffset Time, string Session, string Kind, string Source, string Server);
 
     public MainForm()
     {
-        Text = "Skynet Shield | AdminCP Enterprise";
+        Text = "Skynet Shield | AdminCP Enterprise V2";
         MinimumSize = new Size(960, 640); Size = new Size(1200, 790);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = bg; ForeColor = ink; Font = new Font("Segoe UI", 10);
@@ -51,16 +51,16 @@ public sealed class MainForm : Form
         controls.Controls.Add(new Label { Text = "Solo controla el proceso iniciado por esta aplicación. Servicio local de desarrollo.", AutoSize = true });
         control.Controls.Add(controls);
 
-        var sessionTab = Tab(tabs, "Sessions"); sessionTab.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "La API actual devuelve el total de sesiones vigentes, visible en Dashboard.\nEl listado individual y la revocación administrativa requieren una API futura.", Padding = new Padding(18) });
+        BuildManagementTabs(tabs);
         var eventTab = Tab(tabs, "Security Events");
-        foreach (var name in new[] {"ID","Fecha UTC","Sesión","Tipo","Origen"}) events.Columns.Add(name,name);
+        foreach (var name in new[] {"ID","Fecha UTC","Servidor","Sesión","Tipo","Origen"}) events.Columns.Add(name,name);
         filter.Items.AddRange(new object[] {"Todos","integrity_mismatch","module_unlisted","memory_mismatch","regular_timing_review"}); filter.SelectedIndex = 0;
         filter.SelectedIndexChanged += (_, _) => RenderEvents();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44 };
-        bar.Controls.Add(filter); bar.Controls.Add(Button("Actualizar", async () => await RefreshAsync())); bar.Controls.Add(Button("Exportar JSON", Export));
+        bar.Controls.Add(filter); bar.Controls.Add(serverFilter); bar.Controls.Add(Button("Actualizar", async () => await RefreshAsync())); bar.Controls.Add(Button("Exportar JSON", Export));
         eventTab.Controls.Add(events); eventTab.Controls.Add(bar);
         var report = Tab(tabs, "Reports"); var reportFlow = Flow();
-        reportFlow.Controls.Add(Button("Exportar eventos recientes (JSON)", Export));
+        reportFlow.Controls.Add(Button("Exportar eventos filtrados (JSON)", Export));
         report.Controls.Add(reportFlow);
         var log = Tab(tabs, "Console"); log.Controls.Add(console);
         var config = Tab(tabs, "Settings"); var form = Flow(); form.FlowDirection = FlowDirection.TopDown; form.WrapContents = false;
@@ -76,6 +76,7 @@ public sealed class MainForm : Form
         config.Controls.Add(form);
         endpoint.TextChanged += (_, _) => InvalidateSnapshot();
         adminKey.TextChanged += (_, _) => InvalidateSnapshot();
+        BuildToolsTabs(tabs);
         ApplyTheme(this);
         events.BackgroundColor = panel; events.GridColor = bg; events.EnableHeadersVisualStyles = false;
         events.DefaultCellStyle.BackColor = panel; events.DefaultCellStyle.ForeColor = ink;
@@ -101,7 +102,7 @@ public sealed class MainForm : Form
         }
     }
     static bool ValidKey(string s) => Regex.IsMatch(s, @"\A[0-9a-f]{64}\z");
-    void InvalidateSnapshot() { rows.Clear(); sessions.Text = eventsCount.Text = "—"; status.Text = "Sin conectar"; RenderEvents(); }
+    void InvalidateSnapshot() { rows.Clear(); ClearManagement(); sessions.Text = eventsCount.Text = "—"; status.Text = "Sin conectar"; RenderEvents(); }
     void Log(string text) {
         if (closing || IsDisposed || !IsHandleCreated) return;
         if (InvokeRequired) { try { BeginInvoke(new Action(() => Log(text))); } catch (InvalidOperationException) {} return; }
@@ -143,23 +144,25 @@ public sealed class MainForm : Form
                 if (next.Count >= 100) throw new InvalidDataException();
                 next.Add(new(e.GetProperty("id").GetInt64(),
                     DateTimeOffset.FromUnixTimeSeconds((long)e.GetProperty("created").GetDouble()),
-                    e.GetProperty("game_session").GetString() ?? "",e.GetProperty("kind").GetString() ?? "",e.GetProperty("source").GetString() ?? ""));
+                    e.GetProperty("game_session").GetString() ?? "",e.GetProperty("kind").GetString() ?? "",e.GetProperty("source").GetString() ?? "",e.GetProperty("server_id").GetString() ?? ""));
             }
             if (closing || address != endpoint.Text || key != adminKey.Text) return;
-            rows = next; sessions.Text = total.ToString(); eventsCount.Text = rows.Count.ToString();
+            var snapshot = await FetchManagement(uri,key);
+            if (closing || address != endpoint.Text || key != adminKey.Text) return;
+            rows = next; ApplyManagement(snapshot); sessions.Text = total.ToString(); eventsCount.Text = rows.Count.ToString();
             status.Text = "Conectado"; RenderEvents(); Log("Consulta de actividad correcta.");
         } catch (Exception) { if (!closing && address == endpoint.Text && key == adminKey.Text) { InvalidateSnapshot(); status.Text = "Error de conexión o datos"; Log("No fue posible consultar la API."); } }
         finally { busy = false; }
     }
     void RenderEvents() {
         events.Rows.Clear();
-        foreach (var row in rows.Where(r => filter.SelectedIndex <= 0 || r.Kind == filter.SelectedItem?.ToString()))
-            events.Rows.Add(row.Id,row.Time.ToString("yyyy-MM-dd HH:mm:ss"),row.Session,row.Kind,row.Source);
+        foreach (var row in FilteredEvents())
+            events.Rows.Add(row.Id,row.Time.ToString("yyyy-MM-dd HH:mm:ss"),row.Server,row.Session,row.Kind,row.Source);
     }
     void Export() {
         using var dialog = new SaveFileDialog { Filter = "JSON|*.json", FileName = "shield-events.json" };
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
-        try { File.WriteAllText(dialog.FileName,JsonSerializer.Serialize(rows,new JsonSerializerOptions { WriteIndented = true })); Log("Reporte exportado."); }
+        try { File.WriteAllText(dialog.FileName,JsonSerializer.Serialize(FilteredEvents().ToArray(),new JsonSerializerOptions { WriteIndented = true })); Log("Reporte exportado."); }
         catch (Exception) { Log("No se pudo exportar el reporte."); }
     }
     void StartServer() {
@@ -172,6 +175,8 @@ public sealed class MainForm : Form
             child?.Dispose(); child = null;
             var info = new ProcessStartInfo(python.Text) { WorkingDirectory = Path.GetFullPath(root.Text), UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             info.ArgumentList.Add("-u"); info.ArgumentList.Add("-m"); info.ArgumentList.Add("Server.run");
+            if (registryPath.Text.Trim().Length > 0) info.Environment["SHIELD_REGISTRY"] = Path.GetFullPath(registryPath.Text);
+            else info.Environment.Remove("SHIELD_REGISTRY");
             info.Environment["SHIELD_GAME_KEY"] = gameKey.Text; info.Environment["SHIELD_ADMIN_KEY"] = adminKey.Text; info.Environment["SHIELD_DB"] = db;
             child = new Process { StartInfo = info, EnableRaisingEvents = true };
             child.OutputDataReceived += (_, e) => { if (e.Data != null) Log("Servidor: mensaje recibido."); };

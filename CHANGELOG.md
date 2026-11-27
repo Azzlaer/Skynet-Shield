@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.11.0-alpha (proposed)
+## 0.12.0-alpha (proposed)
+- AdminCP multi-server and session views, filtered export and XML registry validation.
+- Read-only administrative session endpoint with bounded results and no secrets.
+- Diagnostic tabs for integrity, timing reports and local database size.
+
+## 0.11.0-alpha
 - XML registry with separate GameServer credentials, scoped sessions and event attribution.
 - Admin server overview and SQLite migration; isolation tests.
 
